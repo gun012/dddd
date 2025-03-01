@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>좌우 무제한 이동 테트리스</title>
+  <style>
+    /* 전체 페이지 스타일 */
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      user-select: none;
+      text-align: center;
+      /* 예쁜 배경(그라디언트) */
+      background: linear-gradient(135deg, #74ABE2 0%, #5563DE 100%);
+      color: #fff;
+    }
+
+    /* 제목 스타일 */
+    h1 {
+      margin-top: 20px;
+    }
+
+    /* 게임 및 사이드 정보 컨테이너 */
+    #container {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      margin-top: 30px;
+    }
+
+    /* 메인 게임 캔버스 */
+    #game {
+      /* 반투명 배경 */
+      background-color: rgba(0,0,0,0.7);
+      border: 2px solid #888;
+    }
+
+    /* 사이드 정보 박스 */
+    #info {
+      margin-left: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background-color: rgba(0,0,0,0.3);
+      padding: 10px 20px;
+      border-radius: 8px;
+    }
+
+    /* 다음 블록 미리보기 캔버스 */
+    #next {
+      background-color: rgba(0, 0, 0, 0.7);
+      border: 2px solid #888;
+      margin-bottom: 10px;
+    }
+
+    /* 점수 표시 */
+    #score {
+      font-size: 24px;
+      margin: 20px auto;
+    }
+
+    /* 드롭 버튼 */
+    #drop-button {
+      cursor: pointer;
+      padding: 10px 20px;
+      font-size: 16px;
+      color: #fff;
+      background-color: #ff8e0d;
+      border: none;
+      border-radius: 6px;
+      transition: background-color 0.2s;
+    }
+    #drop-button:hover {
+      background-color: #ff7000;
+    }
+  </style>
+</head>
+<body>
+  <h1>테트리스 (좌우 무제한 이동 & 드롭 버튼)</h1>
+  <div id="container">
+    <!-- 메인 게임 캔버스 -->
+    <canvas id="game" width="240" height="400"></canvas>
+    
+    <!-- 오른쪽 정보 영역 -->
+    <div id="info">
+      <!-- 다음 블록 미리보기 캔버스 -->
+      <canvas id="next" width="80" height="80"></canvas>
+      <!-- 점수 표시 -->
+      <div id="score">점수: 0</div>
+      <!-- 드롭 버튼 (클릭 시 블록 낙하) -->
+      <button id="drop-button">Drop</button>
+    </div>
+  </div>
+
+  <script>
+    // 메인 게임 캔버스 설정
+    const canvas = document.getElementById('game');
+    const context = canvas.getContext('2d');
+    context.scale(20, 20); // 블록 크기 확대
+
+    // 다음 블록 미리보기 캔버스
+    const canvasNext = document.getElementById('next');
+    const contextNext = canvasNext.getContext('2d');
+    contextNext.scale(20, 20);
+
+    // 보드(아레나) 2차원 배열 (10 x 20)
+    function createMatrix(w, h) {
+      const matrix = [];
+      while (h--) {
+        matrix.push(new Array(w).fill(0));
+      }
+      return matrix;
+    }
+
+    // 블록 모양 생성 (타입별 2차원 배열)
+    function createPiece(type) {
+      switch (type) {
+        case 'T':
+          return [
+            [0, 1, 0],
+            [1, 1, 1],
+            [0, 0, 0],
+          ];
+        case 'O':
+          return [
+            [2, 2],
+            [2, 2],
+          ];
+        case 'L':
+          return [
+            [0, 3, 0],
+            [0, 3, 0],
+            [0, 3, 3],
+          ];
+        case 'J':
+          return [
+            [0, 4, 0],
+            [0, 4, 0],
+            [4, 4, 0],
+          ];
+        case 'I':
+          return [
+            [0, 5, 0, 0],
+            [0, 5, 0, 0],
+            [0, 5, 0, 0],
+            [0, 5, 0, 0],
+          ];
+        case 'S':
+          return [
+            [0, 6, 6],
+            [6, 6, 0],
+            [0, 0, 0],
+          ];
+        case 'Z':
+          return [
+            [7, 7, 0],
+            [0, 7, 7],
+            [0, 0, 0],
+          ];
+      }
+    }
+
+    /**
+     * [수정 핵심 1] 충돌 판정(collide)
+     * 
+     * 기존에는 x+o.x가 보드 범위를 벗어나면 충돌로 처리했지만,
+     * 여기서는 '가로' 범위 바깥은 충돌로 취급하지 않음.
+     * (아래쪽 끝, 즉 arena 높이를 벗어나면 여전히 충돌)
+     */
+    function collide(arena, player) {
+      const [m, o] = [player.matrix, player.pos];
+      for (let y = 0; y < m.length; ++y) {
+        for (let x = 0; x < m[y].length; ++x) {
+          if (m[y][x] !== 0) {
+            const boardY = y + o.y;
+            const boardX = x + o.x;
+            
+            // 아래쪽을 벗어나면(보드 높이 이상) 충돌
+            if (boardY >= arena.length) {
+              return true;
+            }
+            // 위쪽을 벗어나면(보드보다 y가 -) => 
+            // 보통 Tetris는 시작할 때 살짝 위에 있어도 괜찮아서
+            // 여기서는 충돌로 보지 않도록 처리(필요시 조정 가능)
+            
+            // 좌우 범위 벗어나는 건 '충돌'로 보지 않음
+            // if (boardX < 0 || boardX >= arena[0].length) { ... } => 무시
+
+            // 만약 유효한 범위 안이라면 보드와 겹치는지 확인
+            if (
+              boardX >= 0 &&
+              boardX < arena[0].length &&
+              boardY >= 0 &&
+              boardY < arena.length &&
+              arena[boardY][boardX] !== 0
+            ) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    /**
+     * [수정 핵심 2] merge (블록 고정)
+     * 
+     * 기존에는 x+o.x가 범위 밖이면 에러가 났지만,
+     * 여기서는 범위를 벗어난 부분은 보드에 기록하지 않고 넘어감.
+     */
+    function merge(arena, player) {
+      player.matrix.forEach((row, y) => {
+        row.forEach((value, x) => {
+          if (value !== 0) {
+            const boardY = y + player.pos.y;
+            const boardX = x + player.pos.x;
+            // 보드 범위에 들어오는 셀만 실제로 기록
+            if (
+              boardX >= 0 &&
+              boardX < arena[0].length &&
+              boardY >= 0 &&
+              boardY < arena.length
+            ) {
+              arena[boardY][boardX] = value;
+            }
+            // 범위를 벗어난 칸은 무시(= 화면 밖에 놓여 있음)
+          }
+        });
+      });
+    }
+
+    // 가득 찬 줄 삭제 + 점수 증가
+    function arenaSweep() {
+      outer: for (let y = arena.length - 1; y >= 0; --y) {
+        for (let x = 0; x < arena[y].length; ++x) {
+          if (arena[y][x] === 0) {
+            continue outer;
+          }
+        }
+        const row = arena.splice(y, 1)[0].fill(0);
+        arena.unshift(row);
+        ++y;
+        player.score += 10;
+      }
+    }
+
+    // 메인 캔버스 그리기
+    function draw() {
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      drawMatrix(arena, { x: 0, y: 0 }, context);
+      drawMatrix(player.matrix, player.pos, context);
+    }
+
+    // 행렬(블록) 그리기
+    function drawMatrix(matrix, offset, ctx) {
+      matrix.forEach((row, y) => {
+        row.forEach((value, x) => {
+          if (value !== 0) {
+            ctx.fillStyle = colors[value];
+            ctx.fillRect(x + offset.x, y + offset.y, 1, 1);
+          }
+        });
+      });
+    }
+
+    // "다음 블록" 미리보기
+    function drawNextPiece() {
+      contextNext.fillStyle = '#000';
+      contextNext.fillRect(0, 0, canvasNext.width, canvasNext.height);
+      // nextPiece가 최대 4x4라고 가정
+      const xOffset = 1;
+      const yOffset = 1;
+      drawMatrix(nextPiece, { x: xOffset, y: yOffset }, contextNext);
+    }
+
+    // 자동 낙하 관련 변수
+    let dropCounter = 0;
+    let dropInterval = 1000; // 1초
+    let lastTime = 0;
+
+    // 애니메이션 루프
+    function update(time = 0) {
+      const deltaTime = time - lastTime;
+      lastTime = time;
+
+      dropCounter += deltaTime;
+      if (dropCounter > dropInterval) {
+        playerDrop();
+      }
+
+      draw();
+      requestAnimationFrame(update);
+    }
+
+    // 블록 한 칸 내리기
+    function playerDrop() {
+      player.pos.y++;
+      // 아래 충돌 검사
+      if (collide(arena, player)) {
+        player.pos.y--;
+        merge(arena, player);
+        playerReset();
+        arenaSweep();
+        updateScore();
+      }
+      dropCounter = 0;
+    }
+
+    // 좌우 이동 (끝없이 가능)
+    function playerMove(dir) {
+      player.pos.x += dir;
+      // 이동 후, 아래쪽 충돌만 검사
+      // (좌우는 충돌 취급 X)
+      if (collide(arena, player)) {
+        // 만약 아래쪽이 막히면 되돌림
+        // (가로 범위 밖은 충돌 안 본다고 해도
+        // 혹시 y가 범위 밖이면?)
+        player.pos.x -= dir;
+      }
+    }
+
+    // 블록 회전
+    function playerRotate() {
+      const pos = player.pos.x;
+      let offset = 1;
+      rotate(player.matrix);
+      while (collide(arena, player)) {
+        player.pos.x += offset;
+        offset = -(offset + (offset > 0 ? 1 : -1));
+        if (offset > player.matrix[0].length) {
+          rotate(player.matrix);
+          player.pos.x = pos;
+          return;
+        }
+      }
+    }
+
+    // 행렬 90도 회전
+    function rotate(matrix) {
+      for (let y = 0; y < matrix.length; ++y) {
+        for (let x = 0; x < y; ++x) {
+          [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+        }
+      }
+      matrix.forEach(row => row.reverse());
+    }
+
+    // 새 블록을 현재 플레이어로 적용 + 다음 블록 새로 뽑기
+    function playerReset() {
+      // 다음 블록을 플레이어 블록으로
+      player.matrix = nextPiece;
+
+      // 플레이어 위치 초기화
+      player.pos.y = 0;
+      player.pos.x =
+        ((arena[0].length / 2) | 0) - ((player.matrix[0].length / 2) | 0);
+
+      // 만약 바로 충돌(주로 아래쪽) 시 보드 클리어
+      if (collide(arena, player)) {
+        arena.forEach(row => row.fill(0));
+        player.score = 0;
+        updateScore();
+      }
+
+      // 새로 다음 블록 생성
+      nextPiece = createPiece(randomPieceType());
+      drawNextPiece();
+    }
+
+    // 랜덤 블록 타입
+    function randomPieceType() {
+      const pieces = 'TJLOSZI';
+      return pieces[(pieces.length * Math.random()) | 0];
+    }
+
+    // 점수 갱신
+    function updateScore() {
+      document.getElementById('score').innerText = '점수: ' + player.score;
+    }
+
+    // 색상 배열
+    const colors = [
+      null,
+      '#FF0D72', // T
+      '#0DC2FF', // O
+      '#0DFF72', // L
+      '#F538FF', // J
+      '#FF8E0D', // I
+      '#3877FF', // S
+      '#FFE138', // Z
+    ];
+
+    // 보드
+    const arena = createMatrix(10, 20);
+
+    // 플레이어 상태
+    const player = {
+      pos: { x: 0, y: 0 },
+      matrix: null,
+      score: 0,
+    };
+
+    // 초기에 nextPiece 생성
+    let nextPiece = createPiece(randomPieceType());
+
+    // 키보드 조작
+    document.addEventListener('keydown', event => {
+      switch (event.keyCode) {
+        case 37: // 왼쪽
+          playerMove(-1);
+          break;
+        case 39: // 오른쪽
+          playerMove(1);
+          break;
+        case 40: // 아래 (소프트 드롭)
+          playerDrop();
+          break;
+        case 38: // 위 (회전)
+          playerRotate();
+          break;
+      }
+    });
+
+    // Drop 버튼 클릭 -> 한 칸 아래로 즉시 드롭
+    document.getElementById('drop-button').addEventListener('click', () => {
+      playerDrop();
+    });
+
+    // 게임 시작
+    playerReset();
+    updateScore();
+    update();
+  </script>
+</body>
+</html>
